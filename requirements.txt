@@ -55,10 +55,12 @@ jsonschema-specifications==2025.9.1
 kubernetes==36.0.2
 langchain==1.3.4
 langchain-anthropic==1.4.4
+langchain-chroma==1.1.0
 langchain-classic==1.0.7
 langchain-community==0.4.2
 langchain-core==1.4.1
 langchain-google-genai==4.2.4
+langchain-huggingface==1.2.2
 langchain-protocol==0.0.16
 langchain-text-splitters==1.1.2
 langgraph==1.2.4
