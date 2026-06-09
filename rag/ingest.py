@@ -75,7 +75,7 @@ class DocumentIngester:
         print(f"Vectorstore built and saved to '{self.persist_dir}'")
         return vectorstore
 
-    def ingest(self, persist_dir: str = "./chroma_db/"):
+    def ingest(self):
         """Full pipeline: load → chunk → embed → save."""
         documents = self.load_documents()
         chunks = self.chunk_documents(documents)
