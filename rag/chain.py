@@ -4,8 +4,8 @@ from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.chains import RetrievalQA
-from langchain.prompts import PromptTemplate
+from langchain_classic.chains import RetrievalQA
+from langchain_core.prompts import PromptTemplate
 
 load_dotenv()
 
@@ -94,3 +94,21 @@ class RAGChain:
             return_source_documents=True,
         )
         return chain
+
+    def ask(self, question):
+        """
+        Ask a question and get a grounded answer from the research papers.
+
+        Returns:
+            dict with keys:
+                - "answer"  : the LLM's response
+                - "sources" : list of source documents used
+        """
+        if not question.strip():
+            raise ValueError("Question cannot be empty.")
+        chain = self.build_chain()
+        result = chain.invoke({"query": question})
+        return {
+            "answer": result["result"],
+            "sources": result["source_documents"],
+        }
