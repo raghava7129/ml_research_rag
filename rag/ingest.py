@@ -1,20 +1,23 @@
 import os
+
+from pathlib import Path
 import torch
 from langchain_community.document_loaders import PyPDFDirectoryLoader
 from langchain_text_splitters  import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 
+from config import PAPERS_DIR, CHROMA_DIR, CHUNK_SIZE, CHUNK_OVERLAP, EMBEDDING_MODEL
 
 class DocumentIngester:
     """Handles loading, chunking, and storing ML research papers."""
 
     def __init__(
         self,
-        papers_dir: str = "data/papers/",
-        chunk_size: int = 500,
-        chunk_overlap: int = 100,
-        persist_dir: str = "data/chroma_db/",
+        papers_dir: Path = PAPERS_DIR,
+        chunk_size: int = CHUNK_SIZE,
+        chunk_overlap: int = CHUNK_OVERLAP,
+        persist_dir: Path = CHROMA_DIR,
     ):
         self.papers_dir = papers_dir
         self.chunk_size = chunk_size
@@ -57,7 +60,7 @@ class DocumentIngester:
         """Embed chunks using HuggingFace and persist to ChromaDB."""
         print("Loading embedding model (this may take a minute the first time)...")
         embeddings = HuggingFaceEmbeddings(
-            model_name="all-MiniLM-L6-v2",
+            model_name=EMBEDDING_MODEL,
             model_kwargs={
                 "device": "cuda"
                 if torch.cuda.is_available()

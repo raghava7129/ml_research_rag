@@ -4,6 +4,8 @@ import shutil
 from rag.chain import RAGChain
 from rag.ingest import DocumentIngester
 
+from rag.config import validate_model_access, LLM_MODEL_NAME
+
 st.set_page_config(
     page_title="ML Research RAG Demo",
     page_icon="🧠",
@@ -26,6 +28,20 @@ if "ingested" not in st.session_state:
 
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
+
+from rag.config import validate_model_access
+
+# ──────────────────────── Model access check at startup ────────────────────
+if "model_validated" not in st.session_state:
+    with st.spinner("Checking model access..."):
+        if validate_model_access():
+            st.session_state.model_validated = True
+        else:
+            st.error(
+                f"Model `{LLM_MODEL_NAME}` is not accessible with your API key. "
+                "Check your `config.py` and `.env` file."
+            )
+            st.stop()
 
 # ────────────────────── Sidebar ─────────────────────
 with st.sidebar:
