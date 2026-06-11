@@ -7,7 +7,7 @@ from langchain_text_splitters  import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 
-from config import PAPERS_DIR, CHROMA_DIR, CHUNK_SIZE, CHUNK_OVERLAP, EMBEDDING_MODEL
+from .config import PAPERS_DIR, CHROMA_DIR, CHUNK_SIZE, CHUNK_OVERLAP, EMBEDDING_MODEL
 
 class DocumentIngester:
     """Handles loading, chunking, and storing ML research papers."""
