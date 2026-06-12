@@ -4,7 +4,7 @@ import shutil
 from rag.chain import RAGChain
 from rag.ingest import DocumentIngester
 
-from rag.config import validate_model_access, LLM_MODEL_NAME
+from rag.config import validate_model_access, LLM_MODEL_NAME, DEFAULT_PROMPT_TEMPLATE
 
 st.set_page_config(
     page_title="ML Research RAG Demo",
@@ -28,8 +28,6 @@ if "ingested" not in st.session_state:
 
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
-
-from rag.config import validate_model_access
 
 # ──────────────────────── Model access check at startup ────────────────────
 if "model_validated" not in st.session_state:
@@ -71,7 +69,7 @@ with st.sidebar:
                 st.session_state.ingested = True
 
                 #build RAG chain once after ingestion
-                st.session_state.rag_chain = RAGChain()
+                st.session_state.rag_chain = RAGChain(prompt_template=DEFAULT_PROMPT_TEMPLATE)
                 st.success(f"✅ {len(uploaded_files)} paper(s) ingested successfully!")
 
             except Exception as e:
@@ -103,6 +101,36 @@ with st.sidebar:
 
         st.success("✅ Reset complete. Upload new papers to start again.")
         st.rerun()
+
+    # Prompt template editor
+    st.divider()
+    st.markdown("### ⚙️ Prompt Template")
+    st.caption("Customize assistant instructions.")
+
+    # initialize prompt in session state
+    if "prompt_template" not in st.session_state:
+        st.session_state.prompt_template = DEFAULT_PROMPT_TEMPLATE
+
+    edited_prompt = st.text_area(
+        label="Prompt Template",
+        value=st.session_state.prompt_template,
+        height=200,
+        label_visibility="collapsed",
+    )
+
+    if st.button("Apply Prompt"):
+        # validate prompt has meaningful instruction text
+        if not edited_prompt.strip():
+            st.error("Prompt instructions cannot be empty.")
+        else:
+            st.session_state.prompt_template = edited_prompt
+            # rebuild chain with new prompt if already ingested
+            if st.session_state.ingested:
+                with st.spinner("Rebuilding chain with new prompt..."):
+                    st.session_state.rag_chain = RAGChain(
+                        prompt_template=edited_prompt
+                    )
+            st.success("Prompt updated!")
 
 # ────────────────────── Chat history display ─────────────────────
 for message in st.session_state.messages:

@@ -1,4 +1,5 @@
 import os
+from .config import DEFAULT_PROMPT_TEMPLATE
 import torch
 from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -26,6 +27,16 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+REQUIRED_PROMPT_BLOCK = """
+Context:
+{context}
+
+Question:
+{question}
+
+Answer:
+"""
+
 # Silence noisy third-party INFO logs; keep retry warnings visible.
 for noisy_logger in [
     "httpx",
@@ -52,10 +63,12 @@ class RAGChain:
         persist_dir: str = "data/chroma_db/",
         model_name: str = "gemini-3.5-flash",
         k: int = 3,  # number of chunks to retrieve per question
+        prompt_template: str = DEFAULT_PROMPT_TEMPLATE,
     ):
         self.persist_dir = persist_dir
         self.model_name = model_name
         self.k = k
+        self.prompt_template = prompt_template
         self.api_key = os.getenv("GOOGLE_API_KEY")
 
         if not self.api_key:
@@ -103,19 +116,10 @@ class RAGChain:
             timeout=30,
         )
 
-        prompt_template = """
-        You are an expert ML research assistant.
-        Answer the question using ONLY the context provided below.
-        If the answer is not in the context, say "I don't have enough information in the provided papers."
+        prompt_template = (
+            f"{self.prompt_template.strip()}\n\n{REQUIRED_PROMPT_BLOCK.strip()}"
+        )
 
-        Context:
-        {context}
-
-        Question:
-        {question}
-
-        Answer:
-        """
         prompt = PromptTemplate(
             template=prompt_template,
             input_variables=["context", "question"],

@@ -20,6 +20,10 @@ LLM_MODEL_NAME = "gemini-3.5-flash"
 LLM_TEMPERATURE = 0.3
 RETRIEVER_K = 3
 
+DEFAULT_PROMPT_TEMPLATE = """
+You are a helpful assistant that answers questions strictly based on the provided context.
+If the answer is not found in the context, say "I don't have enough information in the provided documents."
+"""
 
 def validate_model_access(model_name: str = LLM_MODEL_NAME) -> bool:
     """
