@@ -8,17 +8,18 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 ROOT_DIR = Path(__file__).parent.parent
-PAPERS_DIR = ROOT_DIR / "data/papers"
+DOCUMENTS_DIR = ROOT_DIR / "data/documents"
+LEGACY_SOURCE_DIR = ROOT_DIR / "data/papers"
 CHROMA_DIR = ROOT_DIR / "data/chroma_db"
 
-CHUNK_SIZE = 500
-CHUNK_OVERLAP = 100
+CHUNK_SIZE = 1000
+CHUNK_OVERLAP = 200
 
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 LLM_MODEL_NAME = "gemini-3.5-flash"
 LLM_TEMPERATURE = 0.3
-RETRIEVER_K = 3
+RETRIEVER_K = 5
 
 DEFAULT_PROMPT_TEMPLATE = """
 You are a helpful assistant that answers questions strictly based on the provided context.

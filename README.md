@@ -26,7 +26,7 @@ User Question → Embeddings → Retriever → Top K Chunks
 - 📚 Shows source chunks used to generate each answer
 - 🔄 Retry logic with exponential backoff for API resilience
 - ⚙️ Centralized configuration via `config.py`
-- 🧹 Clean reset to swap paper sets anytime
+- 🧹 Clean reset to swap document sets anytime
 
  
 ## ✏️ Custom Prompt Templates
@@ -42,9 +42,9 @@ Question: {question}
 Answer:
 ```
  
-**Medical research:**
+**Healthcare policy documents:**
 ```
-You are a medical research assistant. Use only the provided context.
+You are a healthcare document assistant. Use only the provided context.
 Do not make assumptions beyond what is stated.
 Context: {context}
 Question: {question}

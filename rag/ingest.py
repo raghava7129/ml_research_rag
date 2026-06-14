@@ -7,36 +7,47 @@ from langchain_text_splitters  import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 
-from .config import PAPERS_DIR, CHROMA_DIR, CHUNK_SIZE, CHUNK_OVERLAP, EMBEDDING_MODEL
+from .config import (
+    DOCUMENTS_DIR,
+    LEGACY_SOURCE_DIR,
+    CHROMA_DIR,
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+    EMBEDDING_MODEL,
+)
 
 class DocumentIngester:
-    """Handles loading, chunking, and storing ML research papers."""
+    """Handles loading, chunking, and storing PDF documents."""
 
     def __init__(
         self,
-        papers_dir: Path = PAPERS_DIR,
+        documents_dir: Path = DOCUMENTS_DIR,
         chunk_size: int = CHUNK_SIZE,
         chunk_overlap: int = CHUNK_OVERLAP,
         persist_dir: Path = CHROMA_DIR,
     ):
-        self.papers_dir = papers_dir
+        self.documents_dir = documents_dir
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.persist_dir = persist_dir
 
     def load_documents(self):
-        """Load all PDFs from the papers directory."""
+        """Load all PDFs from the documents directory."""
 
-        if not os.path.exists(self.papers_dir):
-            raise FileNotFoundError(f"Folder '{self.papers_dir}' not found.")
+        source_dir = self.documents_dir
+        if not os.path.exists(source_dir) and os.path.exists(LEGACY_SOURCE_DIR):
+            source_dir = LEGACY_SOURCE_DIR
 
-        pdf_files = [f for f in os.listdir(self.papers_dir) if f.endswith(".pdf")]
+        if not os.path.exists(source_dir):
+            raise FileNotFoundError(f"Folder '{source_dir}' not found.")
+
+        pdf_files = [f for f in os.listdir(source_dir) if f.endswith(".pdf")]
         if not pdf_files:
-            raise ValueError(f"No PDFs found in '{self.papers_dir}'. Add some papers first!")
+            raise ValueError(f"No PDFs found in '{source_dir}'. Add some documents first!")
 
         print(f"Found {len(pdf_files)} PDF(s): {pdf_files}")
 
-        loader = PyPDFDirectoryLoader(self.papers_dir)
+        loader = PyPDFDirectoryLoader(source_dir)
         documents = loader.load()
 
         print(f"Loaded {len(documents)} pages total.")

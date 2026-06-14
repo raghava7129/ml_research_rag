@@ -55,7 +55,7 @@ load_dotenv()
 class RAGChain:
     """
     Connects ChromaDB retriever with Gemini LLM to answer
-    questions grounded in ML research papers.
+    questions grounded in uploaded documents.
     """
 
     def __init__(

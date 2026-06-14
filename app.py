@@ -4,16 +4,23 @@ import shutil
 from rag.chain import RAGChain
 from rag.ingest import DocumentIngester
 
-from rag.config import validate_model_access, LLM_MODEL_NAME, DEFAULT_PROMPT_TEMPLATE
+from rag.config import (
+    validate_model_access,
+    LLM_MODEL_NAME,
+    DEFAULT_PROMPT_TEMPLATE,
+    DOCUMENTS_DIR,
+    LEGACY_SOURCE_DIR,
+    CHROMA_DIR,
+)
 
 st.set_page_config(
-    page_title="ML Research RAG Demo",
+    page_title="DocuChat RAG Demo",
     page_icon="🧠",
     layout="wide"
 )
 
-st.title("🧠 ML Research Paper Assistant")
-st.markdown("Ask questions grounded in your uploaded ML research papers.")
+st.title("🧠 DocuChat Assistant")
+st.markdown("Ask questions grounded in your uploaded documents.")
 st.divider()
 
 # ────────────────────── Session state initialization ─────────────────────
@@ -24,7 +31,7 @@ if "rag_chain" not in st.session_state:
     st.session_state.rag_chain = None # RAGChain object, built after ingestion
 
 if "ingested" not in st.session_state:
-    st.session_state.ingested = False # tracks whether papers have been ingested
+    st.session_state.ingested = False # tracks whether documents have been ingested
 
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
@@ -43,8 +50,8 @@ if "model_validated" not in st.session_state:
 
 # ────────────────────── Sidebar ─────────────────────
 with st.sidebar:
-    st.title("📄 Upload Research Papers")
-    st.markdown("Upload one or more ML research papers in PDF format.")
+    st.title("📄 Upload Documents")
+    st.markdown("Upload one or more PDF documents.")
 
     uploaded_files = st.file_uploader(
         label="Choose PDF files",
@@ -53,16 +60,17 @@ with st.sidebar:
         key=f"pdf_uploader_{st.session_state.uploader_key}",
     )
 
-    if st.button("🚀 Ingest Papers", disabled=not uploaded_files):
-        # save uploaded PDFs to data/papers/
-        with st.spinner("Saving uploaded papers..."):
+    if st.button("🚀 Ingest Documents", disabled=not uploaded_files):
+        # save uploaded PDFs to the documents folder
+        os.makedirs(DOCUMENTS_DIR, exist_ok=True)
+        with st.spinner("Saving uploaded documents..."):
             for file in uploaded_files:
-                save_path = f"data/papers/{file.name}"
+                save_path = DOCUMENTS_DIR / file.name
                 with open(save_path, "wb") as f:
                     f.write(file.getbuffer())
 
         # run ingestion pipeline
-        with st.spinner("Ingesting papers into vectorstore (this may take a minute)..."):
+        with st.spinner("Ingesting documents into vectorstore (this may take a minute)..."):
             try:
                 ingester = DocumentIngester()
                 ingester.ingest()
@@ -70,7 +78,7 @@ with st.sidebar:
 
                 #build RAG chain once after ingestion
                 st.session_state.rag_chain = RAGChain(prompt_template=DEFAULT_PROMPT_TEMPLATE)
-                st.success(f"✅ {len(uploaded_files)} paper(s) ingested successfully!")
+                st.success(f"✅ {len(uploaded_files)} document(s) ingested successfully!")
 
             except Exception as e:
                 st.error(f"❌ Ingestion failed: {e}")
@@ -78,7 +86,7 @@ with st.sidebar:
     if st.session_state.ingested:
         st.info("🟢 Vectorstore is ready — ask your questions!")
     else:
-        st.warning("⚠️ No papers ingested yet. Upload PDFs and click Ingest.")
+        st.warning("⚠️ No documents ingested yet. Upload PDFs and click Ingest.")
 
     st.divider()
     if st.button("🗑️ Clear & Reset", disabled=not st.session_state.ingested):
@@ -91,15 +99,19 @@ with st.sidebar:
         st.session_state.uploader_key += 1
 
         # delete saved PDFs from disk and recreate folder
-        if os.path.exists("data/papers/"):
-            shutil.rmtree("data/papers/")
-        os.makedirs("data/papers/", exist_ok=True)
+        if os.path.exists(DOCUMENTS_DIR):
+            shutil.rmtree(DOCUMENTS_DIR)
+        os.makedirs(DOCUMENTS_DIR, exist_ok=True)
+
+        # clear legacy source folder if present
+        if os.path.exists(LEGACY_SOURCE_DIR):
+            shutil.rmtree(LEGACY_SOURCE_DIR)
 
         # delete chromadb from disk
-        if os.path.exists("data/chroma_db/"):
-            shutil.rmtree("data/chroma_db/")
+        if os.path.exists(CHROMA_DIR):
+            shutil.rmtree(CHROMA_DIR)
 
-        st.success("✅ Reset complete. Upload new papers to start again.")
+        st.success("✅ Reset complete. Upload new documents to start again.")
         st.rerun()
 
     # Prompt template editor
@@ -147,11 +159,11 @@ for message in st.session_state.messages:
 
 # ────────────────────── Chat ─────────────────────
 if not st.session_state.ingested:
-    st.info("Upload research papers in the sidebar and click **Ingest Papers** to start chatting.")
+    st.info("Upload documents in the sidebar and click **Ingest Documents** to start chatting.")
 
 if prompt := st.chat_input(
-    placeholder="Ask a question about your research papers...",
-    disabled=not st.session_state.ingested,  # locked until papers are ingested
+    placeholder="Ask a question about your documents...",
+    disabled=not st.session_state.ingested,  # locked until documents are ingested
 ):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
