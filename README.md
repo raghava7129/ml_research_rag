@@ -8,12 +8,17 @@ Built with LangChain, ChromaDB, HuggingFace embeddings, and Google Gemini.
 
 ## 🏗️ Architecture
 
-```
-PDFs → DocumentIngester → ChromaDB (vectors)
-                                │
-User Question → Embeddings → Retriever → Top K Chunks
-                                                │
-                                            Gemini LLM → Grounded Answer
+```mermaid
+flowchart TD
+    A[PDFs] --> B[DocumentIngester]
+    B --> C[ChromaDB Vector Store]
+
+    Q[User Question] --> M[MultiQuery Retriever<br/>Query Translation]
+    M --> S[SelfQuery Retriever<br/>Query Construction + Metadata Filters]
+    S --> R[Chroma Similarity Search Top K Chunks]
+    C --> R
+    R --> G[Gemini LLM]
+    G --> O[Grounded Answer]
 ```
 
 ---
@@ -22,11 +27,15 @@ User Question → Embeddings → Retriever → Top K Chunks
 
 - 📄 Upload multiple PDFs directly from the UI
 - 🔍 Semantic search over document contents using `all-MiniLM-L6-v2` embeddings
+- 🔁 MultiQuery query translation to generate diverse paraphrased retrieval queries
+- 🧠 SelfQuery retrieval for query construction and metadata-aware filtering
 - 🤖 Answers grounded strictly in uploaded documents
 - 📚 Shows source chunks used to generate each answer
 - 🔄 Retry logic with exponential backoff for API resilience
 - ⚙️ Centralized configuration via `config.py`
 - 🧹 Clean reset to swap document sets anytime
+
+Note: In environments with incompatible LangChain package versions, the pipeline falls back to MultiQuery-only retrieval automatically.
 
  
 ## ✏️ Custom Prompt Templates
@@ -63,6 +72,7 @@ Answer:
 | Embeddings     | HuggingFace                      |
 | Vector Store   | ChromaDB                         |
 | RAG Framework  | LangChain                        |
+| Observability  | LangSmith (tracing/debugging)    |
 | UI             | Streamlit                        |
 
 ---
@@ -91,8 +101,13 @@ pip install -r requirements.txt
 Create a `.env` file in the project root:
 ```
 GOOGLE_API_KEY=your_google_api_key_here
+LANGSMITH_API_KEY=your_langsmith_api_key_here
+LANGSMITH_TRACING=true
+LANGSMITH_PROJECT=ml-research-rag
 ```
 Get your free API key from [Google AI Studio](https://aistudio.google.com/).
+
+If you do not want tracing, set `LANGSMITH_TRACING=false`.
 
 ### 5. Run the app
 ```bash
@@ -101,8 +116,23 @@ streamlit run app.py
 
 Open your browser at `http://localhost:8501`
 
+## 📈 LangSmith Tracing
+
+When `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY` is set, every LangChain run is logged to LangSmith.
+
+Where to check outputs:
+- Go to [LangSmith](https://smith.langchain.com/)
+- Open your project (default: `ml-research-rag`)
+- Check the **Runs** / **Traces** view for each user query, retriever calls, and model outputs
+
+Tip: In the app sidebar you will see whether tracing is ON or OFF.
+
 ## 🚀 Deployment
 
 This project is deployed on [Hugging Face Spaces](https://huggingface.co/spaces).
 
-> ⚠️ Set `GOOGLE_API_KEY` as a secret in your Hugging Face Space settings
+Set these secrets in your Hugging Face Space settings:
+- `GOOGLE_API_KEY`
+- `LANGSMITH_API_KEY`
+- `LANGSMITH_TRACING=true`
+- `LANGSMITH_PROJECT=ml-research-rag`
