@@ -1,12 +1,13 @@
 import os
-from .config import DEFAULT_PROMPT_TEMPLATE
+from .config import DEFAULT_PROMPT_TEMPLATE, CHROMA_DIR, LLM_MODEL_NAME
 import torch
 from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_classic.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 
 import logging
 
@@ -37,7 +38,6 @@ Question:
 Answer:
 """
 
-# Silence noisy third-party INFO logs; keep retry warnings visible.
 for noisy_logger in [
     "httpx",
     "huggingface_hub",
@@ -46,22 +46,26 @@ for noisy_logger in [
 ]:
     logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
-# Hide Hugging Face unauthenticated warning noise in normal runs.
 logging.getLogger("huggingface_hub.utils._http").setLevel(logging.ERROR)
 
 load_dotenv()
 
 
+def _format_docs(docs) -> str:
+    """Join retrieved chunks into a single context string for the prompt."""
+    return "\n\n".join(doc.page_content for doc in docs)
+
+
 class RAGChain:
     """
     Connects ChromaDB retriever with Gemini LLM to answer
-    questions grounded in uploaded documents.
+    questions grounded in uploaded documents, via an LCEL pipeline.
     """
 
     def __init__(
         self,
-        persist_dir: str = "data/chroma_db/",
-        model_name: str = "gemini-3.5-flash",
+        persist_dir: str = CHROMA_DIR,
+        model_name: str = LLM_MODEL_NAME,
         k: int = 3,  # number of chunks to retrieve per question
         prompt_template: str = DEFAULT_PROMPT_TEMPLATE,
     ):
@@ -78,7 +82,6 @@ class RAGChain:
 
     def load_vectorstore(self):
         """Load the existing ChromaDB vectorstore from disk."""
-
         if not os.path.exists(self.persist_dir):
             raise FileNotFoundError(
                 f"Vectorstore not found at '{self.persist_dir}'. "
@@ -100,18 +103,17 @@ class RAGChain:
 
     def build_chain(self):
         """
-        Build the RAG chain by connecting ChromaDB retriever with Gemini.
-        Returns a RetrievalQA chain ready to answer questions.
+        Build the RAG pipeline as an LCEL Runnable:
+        retrieve docs -> format context -> fill prompt -> call LLM -> parse output,
+        while still surfacing the retrieved source documents alongside the answer.
         """
         vectorstore = self.load_vectorstore()
-
-        # convert vectorstore into a retriever.
         retriever = vectorstore.as_retriever(search_kwargs={"k": self.k})
 
         llm = ChatGoogleGenerativeAI(
             model=self.model_name,
             api_key=self.api_key,
-            temperature=0.3, # add some variability to responses
+            temperature=0.3,
             max_retries=0,
             timeout=30,
         )
@@ -119,19 +121,28 @@ class RAGChain:
         prompt_template = (
             f"{self.prompt_template.strip()}\n\n{REQUIRED_PROMPT_BLOCK.strip()}"
         )
-
         prompt = PromptTemplate(
             template=prompt_template,
             input_variables=["context", "question"],
         )
 
-        chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            retriever=retriever,
-            chain_type="stuff",
-            chain_type_kwargs={"prompt": prompt},
-            return_source_documents=True,
+        # Sub-chain: takes {"context": [Document, ...], "question": str}
+        # and produces the final answer string.
+        answer_chain = (
+            RunnablePassthrough.assign(
+                context=lambda x: _format_docs(x["context"])
+            )
+            | prompt
+            | llm
+            | StrOutputParser()
         )
+
+        # Full chain: takes {"question": str}, retrieves docs, runs answer_chain,
+        # and returns both "context" (source docs) and "answer".
+        chain = RunnablePassthrough.assign(
+            context=(lambda x: x["question"]) | retriever
+        ).assign(answer=answer_chain)
+
         return chain
 
     @retry(
@@ -142,7 +153,7 @@ class RAGChain:
         reraise=True,
     )
     def _invoke_chain(self, question):
-        return self.chain.invoke({"query": question})
+        return self.chain.invoke({"question": question})
 
     def ask(self, question):
         if not question.strip():
@@ -152,8 +163,8 @@ class RAGChain:
             result = self._invoke_chain(question)
 
             return {
-                "answer": result["result"],
-                "sources": result["source_documents"],
+                "answer": result["answer"],
+                "sources": result["context"],
             }
 
         except (ServerError, TimeoutError, ConnectionError) as e:
@@ -161,7 +172,6 @@ class RAGChain:
                 "Gemini unavailable after all retries: %s",
                 str(e),
             )
-
             return {
                 "answer": (
                     "The AI service is temporarily unavailable. "

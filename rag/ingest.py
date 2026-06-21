@@ -1,11 +1,12 @@
 import os
-
 from pathlib import Path
+
 import torch
 from langchain_community.document_loaders import PyPDFDirectoryLoader
-from langchain_text_splitters  import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
+from langchain_core.runnables import RunnableLambda
 
 from .config import (
     DOCUMENTS_DIR,
@@ -16,8 +17,9 @@ from .config import (
     EMBEDDING_MODEL,
 )
 
+
 class DocumentIngester:
-    """Handles loading, chunking, and storing PDF documents."""
+    """Handles loading, chunking, and storing PDF documents via an LCEL chain."""
 
     def __init__(
         self,
@@ -31,9 +33,14 @@ class DocumentIngester:
         self.chunk_overlap = chunk_overlap
         self.persist_dir = persist_dir
 
-    def load_documents(self):
-        """Load all PDFs from the documents directory."""
+        self.chain = (
+            RunnableLambda(self._resolve_source_dir)
+            | RunnableLambda(self._load_documents)
+            | RunnableLambda(self._chunk_documents)
+            | RunnableLambda(self._build_vectorstore)
+        )
 
+    def _resolve_source_dir(self, _input=None) -> str:
         source_dir = self.documents_dir
         if not os.path.exists(source_dir) and os.path.exists(LEGACY_SOURCE_DIR):
             source_dir = LEGACY_SOURCE_DIR
@@ -41,6 +48,9 @@ class DocumentIngester:
         if not os.path.exists(source_dir):
             raise FileNotFoundError(f"Folder '{source_dir}' not found.")
 
+        return source_dir
+
+    def _load_documents(self, source_dir: str):
         pdf_files = [f for f in os.listdir(source_dir) if f.endswith(".pdf")]
         if not pdf_files:
             raise ValueError(f"No PDFs found in '{source_dir}'. Add some documents first!")
@@ -53,22 +63,19 @@ class DocumentIngester:
         print(f"Loaded {len(documents)} pages total.")
         return documents
 
-    def chunk_documents(self, documents):
-        """Split documents into smaller overlapping chunks."""
-
-        splitter = RecursiveCharacterTextSplitter(
+    def _chunk_documents(self, documents):
+        splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+            encoding_name="cl100k_base",
             chunk_size=self.chunk_size,
             chunk_overlap=self.chunk_overlap,
-            length_function=len,
         )
 
         chunks = splitter.split_documents(documents)
 
-        print(f"Split into {len(chunks)} chunks from {len(documents)} pages.")
+        print(f"Split into {len(chunks)} chunks (token-based) from {len(documents)} pages.")
         return chunks
 
-    def build_vectorstore(self, chunks):
-        """Embed chunks using HuggingFace and persist to ChromaDB."""
+    def _build_vectorstore(self, chunks):
         print("Loading embedding model (this may take a minute the first time)...")
         embeddings = HuggingFaceEmbeddings(
             model_name=EMBEDDING_MODEL,
@@ -90,8 +97,5 @@ class DocumentIngester:
         return vectorstore
 
     def ingest(self):
-        """Full pipeline: load → chunk → embed → save."""
-        documents = self.load_documents()
-        chunks = self.chunk_documents(documents)
-        vectorstore = self.build_vectorstore(chunks)
-        return vectorstore
+        """Full pipeline: resolve dir → load → chunk → embed → save."""
+        return self.chain.invoke(None)
