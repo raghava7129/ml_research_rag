@@ -6,6 +6,7 @@ from rag.ingest import DocumentIngester
 
 from rag.config import (
     validate_model_access,
+    setup_langsmith,
     LLM_MODEL_NAME,
     DEFAULT_PROMPT_TEMPLATE,
     DOCUMENTS_DIR,
@@ -22,6 +23,10 @@ st.set_page_config(
 st.title("🧠 DocuChat Assistant")
 st.markdown("Ask questions grounded in your uploaded documents.")
 st.divider()
+
+# setup LangSmith
+if "langsmith" not in st.session_state:
+    st.session_state.langsmith = setup_langsmith()
 
 # ────────────────────── Session state initialization ─────────────────────
 if "messages" not in st.session_state:
@@ -53,6 +58,14 @@ with st.sidebar:
     st.title("📄 Upload Documents")
     st.markdown("Upload one or more PDF documents.")
 
+    if st.session_state.langsmith["enabled"]:
+        st.success("LangSmith tracing ON")
+    else:
+        st.caption(
+            "LangSmith tracing is OFF. Set LANGSMITH_TRACING=true and "
+            "LANGSMITH_API_KEY in .env to enable trace logging."
+        )
+
     uploaded_files = st.file_uploader(
         label="Choose PDF files",
         type="pdf",
@@ -74,14 +87,19 @@ with st.sidebar:
             try:
                 ingester = DocumentIngester()
                 ingester.ingest()
-                st.session_state.ingested = True
-
-                #build RAG chain once after ingestion
-                st.session_state.rag_chain = RAGChain(prompt_template=DEFAULT_PROMPT_TEMPLATE)
-                st.success(f"✅ {len(uploaded_files)} document(s) ingested successfully!")
-
             except Exception as e:
                 st.error(f"❌ Ingestion failed: {e}")
+                st.stop()
+
+        with st.spinner("Building retriever/LLM chain..."):
+            try:
+                rag_chain = RAGChain(prompt_template=DEFAULT_PROMPT_TEMPLATE)
+                # build RAG chain once after ingestion
+                st.session_state.rag_chain = rag_chain
+                st.session_state.ingested = True
+                st.success(f"✅ {len(uploaded_files)} document(s) ingested successfully!")
+            except Exception as e:
+                st.error(f"❌ Chain setup failed: {e}")
 
     if st.session_state.ingested:
         st.info("🟢 Vectorstore is ready — ask your questions!")

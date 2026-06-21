@@ -26,6 +26,44 @@ You are a helpful assistant that answers questions strictly based on the provide
 If the answer is not found in the context, say "I don't have enough information in the provided documents."
 """
 
+LANGSMITH_TRACING = os.getenv("LANGSMITH_TRACING", "false").strip().lower() == "true"
+
+LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT", "ml-research-rag")
+LANGSMITH_ENDPOINT = os.getenv(
+    "LANGSMITH_ENDPOINT", "https://api.smith.langchain.com"
+)
+
+
+def setup_langsmith() -> dict:
+    """Initialize LangSmith tracing env vars and return current tracing status."""
+    api_key = os.getenv("LANGSMITH_API_KEY", "").strip()
+
+    if LANGSMITH_TRACING:
+        if api_key:
+            os.environ["LANGSMITH_API_KEY"] = api_key
+            os.environ["LANGSMITH_PROJECT"] = LANGSMITH_PROJECT
+            os.environ["LANGSMITH_ENDPOINT"] = LANGSMITH_ENDPOINT
+            os.environ["LANGSMITH_TRACING"] = "true"
+            os.environ["LANGCHAIN_TRACING_V2"] = "true"
+            logger.info(
+                "LangSmith tracing enabled (project=%s, endpoint=%s).",
+                LANGSMITH_PROJECT,
+                LANGSMITH_ENDPOINT,
+            )
+            return {
+                "enabled": True,
+                "project": LANGSMITH_PROJECT,
+                "endpoint": LANGSMITH_ENDPOINT,
+            }
+
+        logger.warning("LANGSMITH_API_KEY is missing.")
+
+    return {
+        "enabled": False,
+        "project": LANGSMITH_PROJECT,
+        "endpoint": LANGSMITH_ENDPOINT,
+    }
+
 def validate_model_access(model_name: str = LLM_MODEL_NAME) -> bool:
     """
     Check if the API key has access to the configured model.

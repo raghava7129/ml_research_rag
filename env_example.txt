@@ -1,1 +1,5 @@
 GOOGLE_API_KEY=
+LANGSMITH_API_KEY=
+LANGSMITH_TRACING=false
+LANGSMITH_PROJECT=ml-research-rag
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
