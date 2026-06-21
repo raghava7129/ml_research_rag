@@ -48,6 +48,9 @@ for noisy_logger in [
 
 logging.getLogger("huggingface_hub.utils._http").setLevel(logging.ERROR)
 
+# MultiQueryRetriever logs the generated query variants at INFO level.
+logging.getLogger("langchain.retrievers.multi_query").setLevel(logging.WARNING)
+
 load_dotenv()
 
 
@@ -58,8 +61,9 @@ def _format_docs(docs) -> str:
 
 class RAGChain:
     """
-    Connects ChromaDB retriever with Gemini LLM to answer
-    questions grounded in uploaded documents, via an LCEL pipeline.
+    Connects ChromaDB retriever with Gemini LLM to answer questions
+    grounded in uploaded documents, via an LCEL pipeline with
+    Multi-Query (query translation) wrapping Self-Query (query construction).
     """
 
     def __init__(
@@ -101,14 +105,98 @@ class RAGChain:
         logger.debug("Vectorstore loaded from '%s'", self.persist_dir)
         return vectorstore
 
+    def build_retriever(self, vectorstore, llm):
+        """
+        Build the combined retriever:
+          1. Self-Query (query construction) — parses the question into a
+             metadata filter (e.g. source == 'paper.pdf') + a cleaned
+             semantic query, then filters + searches Chroma.
+          2. Multi-Query (query translation) — wraps (1), generating several
+             paraphrased versions of the question first, running each
+             through the self-query retriever, and merging/deduping results.
+        """
+        base_retriever = vectorstore.as_retriever(search_kwargs={"k": self.k})
+
+        try:
+            from langchain_classic.retrievers.multi_query import MultiQueryRetriever
+        except Exception as e:
+            logger.warning(
+                "MultiQueryRetriever unavailable (%s). Falling back to base retriever.",
+                str(e),
+            )
+            return base_retriever
+
+        try:
+            from langchain_classic.chains.query_constructor.schema import AttributeInfo
+            from langchain_classic.retrievers.self_query.base import SelfQueryRetriever
+        except Exception as e:
+            logger.warning(
+                "SelfQueryRetriever unavailable (%s). Falling back to MultiQuery only.",
+                str(e),
+            )
+            return MultiQueryRetriever.from_llm(
+                retriever=base_retriever,
+                llm=llm,
+            )
+
+        try:
+            metadata_field_info = [
+                AttributeInfo(
+                    name="source",
+                    description=(
+                        "The filename of the PDF document this chunk came from, "
+                        "e.g. 'research_paper_2023.pdf'. Use this to filter to a "
+                        "specific document when the user names or implies one."
+                    ),
+                    type="string",
+                ),
+                AttributeInfo(
+                    name="page",
+                    description=(
+                        "The page number within the source PDF where this chunk "
+                        "appears (0-indexed). Use this only if the user explicitly "
+                        "references a page number."
+                    ),
+                    type="integer",
+                ),
+            ]
+
+            document_content_description = (
+                "Excerpts from research/technical PDF documents uploaded by the user."
+            )
+
+            self_query_retriever = SelfQueryRetriever.from_llm(
+                llm=llm,
+                vectorstore=vectorstore,
+                document_contents=document_content_description,
+                metadata_field_info=metadata_field_info,
+                search_kwargs={"k": self.k},
+                enable_limit=False,
+            )
+
+            multi_query_retriever = MultiQueryRetriever.from_llm(
+                retriever=self_query_retriever,
+                llm=llm,
+            )
+
+            return multi_query_retriever
+        except Exception as e:
+            logger.warning(
+                "SelfQuery initialization failed (%s). Falling back to MultiQuery only.",
+                str(e),
+            )
+            return MultiQueryRetriever.from_llm(
+                retriever=base_retriever,
+                llm=llm,
+            )
+
     def build_chain(self):
         """
         Build the RAG pipeline as an LCEL Runnable:
-        retrieve docs -> format context -> fill prompt -> call LLM -> parse output,
-        while still surfacing the retrieved source documents alongside the answer.
+        translate + construct query -> retrieve -> format context
+        -> fill prompt -> call LLM -> parse output.
         """
         vectorstore = self.load_vectorstore()
-        retriever = vectorstore.as_retriever(search_kwargs={"k": self.k})
 
         llm = ChatGoogleGenerativeAI(
             model=self.model_name,
@@ -117,6 +205,8 @@ class RAGChain:
             max_retries=0,
             timeout=30,
         )
+
+        retriever = self.build_retriever(vectorstore, llm)
 
         prompt_template = (
             f"{self.prompt_template.strip()}\n\n{REQUIRED_PROMPT_BLOCK.strip()}"

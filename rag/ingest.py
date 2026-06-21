@@ -2,7 +2,9 @@ import os
 from pathlib import Path
 
 import torch
-from langchain_community.document_loaders import PyPDFDirectoryLoader
+from pypdf import PdfReader
+from langchain_core.documents import Document
+# from langchain_community.document_loaders import PyPDFDirectoryLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
@@ -36,9 +38,26 @@ class DocumentIngester:
         self.chain = (
             RunnableLambda(self._resolve_source_dir)
             | RunnableLambda(self._load_documents)
+            | RunnableLambda(self._normalize_metadata)
             | RunnableLambda(self._chunk_documents)
             | RunnableLambda(self._build_vectorstore)
         )
+
+    def _load_pdfs_from_dir(self, source_dir: str) -> list[Document]:
+        documents = []
+        for filename in os.listdir(source_dir):
+            if not filename.lower().endswith(".pdf"):
+                continue
+            filepath = os.path.join(source_dir, filename)
+            reader = PdfReader(filepath)
+            for page_num, page in enumerate(reader.pages):
+                documents.append(
+                    Document(
+                        page_content=page.extract_text() or "",
+                        metadata={"source": filename, "page": page_num},
+                    )
+                )
+        return documents
 
     def _resolve_source_dir(self, _input=None) -> str:
         source_dir = self.documents_dir
@@ -57,10 +76,18 @@ class DocumentIngester:
 
         print(f"Found {len(pdf_files)} PDF(s): {pdf_files}")
 
-        loader = PyPDFDirectoryLoader(source_dir)
-        documents = loader.load()
+        documents = self._load_pdfs_from_dir(source_dir)
 
         print(f"Loaded {len(documents)} pages total.")
+        return documents
+
+    def _normalize_metadata(self, documents):
+        """
+        Add source to metadata so it's usable for self-query filtering downstream.
+        """
+        for doc in documents:
+            full_path = doc.metadata.get("source", "")
+            doc.metadata["source"] = os.path.basename(full_path)
         return documents
 
     def _chunk_documents(self, documents):
