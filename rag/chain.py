@@ -6,8 +6,8 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
+from pydantic import BaseModel, Field
 
 import logging
 
@@ -28,6 +28,8 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+logger.setLevel(logging.INFO)
+
 REQUIRED_PROMPT_BLOCK = """
 Context:
 {context}
@@ -47,8 +49,6 @@ for noisy_logger in [
     logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 logging.getLogger("huggingface_hub.utils._http").setLevel(logging.ERROR)
-
-# MultiQueryRetriever logs the generated query variants at INFO level.
 logging.getLogger("langchain.retrievers.multi_query").setLevel(logging.WARNING)
 
 load_dotenv()
@@ -59,11 +59,23 @@ def _format_docs(docs) -> str:
     return "\n\n".join(doc.page_content for doc in docs)
 
 
+class GradeDocuments(BaseModel):
+    """Relevance grader: gives yes/no o/p."""
+    binary_score: str = Field(
+        description="Is the document relevant to the question? Answer 'yes' or 'no'."
+    )
+
+
 class RAGChain:
     """
     Connects ChromaDB retriever with Gemini LLM to answer questions
-    grounded in uploaded documents, via an LCEL pipeline with
-    Multi-Query (query translation) wrapping Self-Query (query construction).
+    grounded in uploaded documents.
+
+    Pipeline:
+      1. Retrieve chunks (Multi-Query + Self-Query).
+      2. Grade each chunk for relevance to the question.
+      3. If nothing is relevant, rewrite the question and retrieve once more.
+      4. Generate the final answer from whatever relevant chunks remain.
     """
 
     def __init__(
@@ -82,7 +94,7 @@ class RAGChain:
         if not self.api_key:
             raise ValueError("GOOGLE_API_KEY not found in .env file.")
 
-        self.chain = self.build_chain()
+        self._build_components()
 
     def load_vectorstore(self):
         """Load the existing ChromaDB vectorstore from disk."""
@@ -190,15 +202,10 @@ class RAGChain:
                 llm=llm,
             )
 
-    def build_chain(self):
-        """
-        Build the RAG pipeline as an LCEL Runnable:
-        translate + construct query -> retrieve -> format context
-        -> fill prompt -> call LLM -> parse output.
-        """
-        vectorstore = self.load_vectorstore()
+    def _build_components(self):
+        self.vectorstore = self.load_vectorstore()
 
-        llm = ChatGoogleGenerativeAI(
+        self.llm = ChatGoogleGenerativeAI(
             model=self.model_name,
             api_key=self.api_key,
             temperature=0.3,
@@ -206,34 +213,79 @@ class RAGChain:
             timeout=30,
         )
 
-        retriever = self.build_retriever(vectorstore, llm)
+        self.retriever = self.build_retriever(self.vectorstore, self.llm)
 
         prompt_template = (
             f"{self.prompt_template.strip()}\n\n{REQUIRED_PROMPT_BLOCK.strip()}"
         )
-        prompt = PromptTemplate(
+        self.prompt = PromptTemplate(
             template=prompt_template,
             input_variables=["context", "question"],
         )
 
-        # Sub-chain: takes {"context": [Document, ...], "question": str}
-        # and produces the final answer string.
-        answer_chain = (
-            RunnablePassthrough.assign(
-                context=lambda x: _format_docs(x["context"])
-            )
-            | prompt
-            | llm
-            | StrOutputParser()
+        self.answer_chain = self.prompt | self.llm | StrOutputParser()
+
+        self.grader_llm = self.llm.with_structured_output(GradeDocuments)
+
+        grade_prompt_template = PromptTemplate(
+            template=(
+                "You are a grader assessing relevance of a retrieved document "
+                "to a user question.\n\n"
+                "Retrieved document:\n{document}\n\n"
+                "User question: {question}\n\n"
+                "If the document contains information related to the question, "
+                "grade it as relevant. Give a binary score 'yes' or 'no'."
+            ),
+            input_variables=["document", "question"],
         )
+        self.grader = grade_prompt_template | self.grader_llm
 
-        # Full chain: takes {"question": str}, retrieves docs, runs answer_chain,
-        # and returns both "context" (source docs) and "answer".
-        chain = RunnablePassthrough.assign(
-            context=(lambda x: x["question"]) | retriever
-        ).assign(answer=answer_chain)
+        rewrite_prompt_template = PromptTemplate(
+            template=(
+                "You are rewriting a search query to improve retrieval from a "
+                "vector database. Look at the input question and try to reason "
+                "about the underlying semantic intent.\n\n"
+                "Original question: {question}\n\n"
+                "Rewrite it as a single, improved search query. "
+                "Return ONLY the rewritten query, nothing else."
+            ),
+            input_variables=["question"],
+        )
+        self.rewriter = rewrite_prompt_template | self.llm | StrOutputParser()
 
-        return chain
+    def grade_documents(self, question: str, docs: list) -> list:
+        """Grade each retrieved doc for relevance; keep only the 'yes' ones."""
+        relevant_docs = []
+        for doc in docs:
+            try:
+                result = self.grader.invoke(
+                    {"document": doc.page_content, "question": question}
+                )
+                score = result.binary_score.strip().lower()
+            except Exception:
+                logger.exception("Grading failed for a chunk; keeping it by default.")
+                relevant_docs.append(doc)
+                continue
+
+            source = doc.metadata.get("source", "unknown")
+            if score == "yes":
+                logger.info("Grader: RELEVANT   (source=%s)", source)
+                relevant_docs.append(doc)
+            else:
+                logger.info("Grader: NOT relevant (source=%s)", source)
+
+        return relevant_docs
+
+    def rewrite_query(self, question: str) -> str:
+        """Rephrase the question for better retrieval."""
+        rewritten = self.rewriter.invoke({"question": question})
+        logger.info("Rewrote query: '%s' -> '%s'", question, rewritten)
+        return rewritten.strip()
+
+    def _retrieve_and_grade(self, question: str):
+        docs = self.retriever.invoke(question)
+        graded = self.grade_documents(question, docs)
+        return graded, question
 
     @retry(
         retry=retry_if_exception_type((ServerError, TimeoutError, ConnectionError)),
@@ -242,19 +294,31 @@ class RAGChain:
         before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True,
     )
-    def _invoke_chain(self, question):
-        return self.chain.invoke({"question": question})
+    def _generate_answer(self, question: str, docs: list) -> str:
+        return self.answer_chain.invoke(
+            {"context": _format_docs(docs), "question": question}
+        )
 
-    def ask(self, question):
+    def ask(self, question: str):
         if not question.strip():
             raise ValueError("Question cannot be empty.")
 
         try:
-            result = self._invoke_chain(question)
+            # Step 1: retrieve + grade with the original question.
+            graded_docs, _ = self._retrieve_and_grade(question)
+
+            # Step 2: if nothing survived grading, rewrite the query and retry once.
+            if not graded_docs:
+                logger.info("No relevant chunks found. Rewriting query and retrying.")
+                rewritten_question = self.rewrite_query(question)
+                graded_docs, _ = self._retrieve_and_grade(rewritten_question)
+
+            # Step 3: generate the answer.
+            answer = self._generate_answer(question, graded_docs)
 
             return {
-                "answer": result["answer"],
-                "sources": result["context"],
+                "answer": answer,
+                "sources": graded_docs,
             }
 
         except (ServerError, TimeoutError, ConnectionError) as e:
