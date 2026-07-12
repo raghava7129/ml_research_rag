@@ -66,6 +66,26 @@ class GradeDocuments(BaseModel):
     )
 
 
+class RouterQuery(BaseModel):
+    """Query router: decides where this Question should be sent to (Retrieval or General)."""
+    datasource: str = Field(
+        description=
+        "Given a user question, choose which datasource would best answer it. "
+        "Return 'vectorstore' if the question could plausibly be answered from "
+        "the user's uploaded documents (research papers, technical PDFs, etc). "
+        "Return 'general' if the question is general knowledge, small talk, "
+        "or clearly unrelated to any document content, e.g. 'what's 2+2', "
+        "'who are you', 'what's the weather'."
+    )
+
+
+OFF_TOPIC_MESSAGE = (
+    "I'm only able to answer questions grounded in your uploaded documents. "
+    "That question doesn't look related to them — try rephrasing it, or "
+    "upload a document that covers this topic."
+)
+
+
 class RAGChain:
     """
     Connects ChromaDB retriever with Gemini LLM to answer questions
@@ -202,6 +222,22 @@ class RAGChain:
                 llm=llm,
             )
 
+    def route_question(self, question: str) -> str:
+        """Classify the question as 'vectorstore' or 'general'."""
+        try:
+            result = self.router.invoke({"question": question})
+            datasource = result.datasource.strip().lower()
+        except Exception:
+            logger.exception("Routing failed; defaulting to 'vectorstore'.")
+            return "vectorstore"
+
+        if datasource not in ("vectorstore", "general"):
+            logger.warning("Unexpected router output '%s'; defaulting to 'vectorstore'.", datasource)
+            return "vectorstore"
+
+        logger.info("Router decision: '%s' -> %s", question, datasource)
+        return datasource
+
     def _build_components(self):
         self.vectorstore = self.load_vectorstore()
 
@@ -212,6 +248,24 @@ class RAGChain:
             max_retries=0,
             timeout=30,
         )
+
+        # Router (decides if retrieval is even needed)
+        self.router_llm = self.llm.with_structured_output(RouterQuery)
+
+        router_prompt_template = PromptTemplate(
+            template=(
+                "You are an expert at routing a user question to the right "
+                "datasource.\n\n"
+                "The vectorstore contains: research/technical PDF documents "
+                "uploaded by the user.\n\n"
+                "User question: {question}\n\n"
+                "Decide whether this question should go to the 'vectorstore' "
+                "or is 'general' (small talk, unrelated general knowledge)."
+            ),
+            input_variables=["question"],
+        )
+
+        self.router = router_prompt_template | self.router_llm
 
         self.retriever = self.build_retriever(self.vectorstore, self.llm)
 
@@ -304,6 +358,15 @@ class RAGChain:
             raise ValueError("Question cannot be empty.")
 
         try:
+            #step 0: route the question to decide if retrieval is needed.
+            datasource = self.route_question(question)
+            if datasource == "general":
+                logger.info("Router decided this is a general question; skipping retrieval.")
+                return {
+                    "answer": OFF_TOPIC_MESSAGE,
+                    "sources": [],
+                }
+
             # Step 1: retrieve + grade with the original question.
             graded_docs, _ = self._retrieve_and_grade(question)
 
