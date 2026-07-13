@@ -1,138 +1,63 @@
-# 🧠 DocuChat — Generic RAG Pipeline
+# 🧠 DocuChat — Agentic RAG Pipeline
 
-A configurable Retrieval-Augmented Generation (RAG) chatbot that answers questions grounded in any document set. Upload PDFs, customize the prompt template for your domain, and get answers strictly based on your documents — not the LLM's training data.
+A configurable Retrieval-Augmented Generation (RAG) chatbot that answers questions grounded in any document set. Upload PDFs, customize the agent's instructions for your domain, and get answers strictly based on your documents — not the LLM's training data.
 
-Built with LangChain, ChromaDB, HuggingFace embeddings, and Google Gemini.
+Built with LangChain, LangGraph, ChromaDB, HuggingFace embeddings, and Google Gemini.
 
 ---
 
 ## 🏗️ Architecture
+
+DocuChat uses a **ReAct agent** (LangGraph) that reasons about each question and decides, turn by turn, which tool (if any) to call before answering.
 
 ```mermaid
 flowchart TD
     A[PDFs] --> B[DocumentIngester]
     B --> C[ChromaDB Vector Store]
 
-    Q[User Question] --> M[MultiQuery Retriever<br/>Query Translation]
-    M --> S[SelfQuery Retriever<br/>Query Construction + Metadata Filters]
-    S --> R[Chroma Similarity Search Top K Chunks]
-    C --> R
-    R --> G[Gemini LLM]
-    G --> O[Grounded Answer]
+    U[User Question] --> AG[Agent: reason]
+    AG -->|needs docs| RT[retrieve_documents tool]
+    AG -->|needs math| CT[calculator tool]
+    AG -->|neither| ANS[Answer directly]
+
+    RT --> MQ[MultiQuery Retriever]
+    MQ --> SQ[SelfQuery Retriever]
+    SQ --> C
+    C --> GR[Relevance Grader]
+    GR -->|nothing relevant| RW[Rewrite query] --> SQ
+    GR -->|relevant chunks| AG
+
+    CT --> AG
+    AG -->|has enough info| FA[Final Answer]
 ```
+
+**How a question flows through the agent:**
+1. The agent (Gemini) reads the question and decides whether it needs a tool.
+2. If it calls `retrieve_documents`: the query goes through Multi-Query (paraphrased query variants) → Self-Query (metadata-aware filtering, e.g. by source filename or page) → ChromaDB similarity search → a relevance grader that scores each returned chunk. If nothing passes grading, the query is automatically rewritten and retried once.
+3. If it calls `calculator`: the expression is evaluated safely via `sympy` (no raw `eval`).
+4. The agent can call tools more than once per question (e.g. retrieve a fact, then calculate with it) before producing a final answer.
+5. If the question is off-topic for the documents entirely, the agent answers directly or declines, per its system prompt — no retrieval is wasted on it.
 
 ---
 
 ## ✨ Features
 
+- 🤖 **ReAct agent** (LangGraph) — decides which tool to use per question instead of following a fixed pipeline
 - 📄 Upload multiple PDFs directly from the UI
 - 🔍 Semantic search over document contents using `all-MiniLM-L6-v2` embeddings
 - 🔁 MultiQuery query translation to generate diverse paraphrased retrieval queries
 - 🧠 SelfQuery retrieval for query construction and metadata-aware filtering
-- 🤖 Answers grounded strictly in uploaded documents
+- ✅ **Relevance grading** — retrieved chunks are scored for relevance before being used; irrelevant ones are discarded
+- 🔄 **Automatic query rewriting** — if grading finds nothing relevant, the question is rephrased and retried once before giving up
+- 🧮 **Calculator tool** — the agent can do arithmetic instead of guessing at numbers
+- 🤖 Answers grounded strictly in uploaded documents (agent is instructed never to answer document questions from memory)
 - 📚 Shows source chunks used to generate each answer
 - 🔄 Retry logic with exponential backoff for API resilience
 - ⚙️ Centralized configuration via `config.py`
 - 🧹 Clean reset to swap document sets anytime
 
-Note: In environments with incompatible LangChain package versions, the pipeline falls back to MultiQuery-only retrieval automatically.
+Note: In environments with incompatible LangChain package versions, the retrieval pipeline falls back to MultiQuery-only (or base similarity search) automatically.
 
- 
-## ✏️ Custom Prompt Templates
- 
-The sidebar lets you customize how the AI answers. This makes the pipeline adaptable to any domain:
- 
-**Legal documents:**
-```
-You are a legal assistant. Answer strictly from the context below.
-If not found, say "This information is not in the provided documents."
-Context: {context}
-Question: {question}
-Answer:
-```
- 
-**Healthcare policy documents:**
-```
-You are a healthcare document assistant. Use only the provided context.
-Do not make assumptions beyond what is stated.
-Context: {context}
-Question: {question}
-Answer:
-```
- 
-> ⚠️ Prompt must always contain `{context}` and `{question}` placeholders.
- 
----
+## ✏️ Custom Agent Instructions
 
-## 🛠️ Tech Stack
-
-| Component      | Technology                       |
-|----------------|----------------------------------|
-| LLM            | Google Gemini                    |
-| Embeddings     | HuggingFace                      |
-| Vector Store   | ChromaDB                         |
-| RAG Framework  | LangChain                        |
-| Observability  | LangSmith (tracing/debugging)    |
-| UI             | Streamlit                        |
-
----
-
-## ⚙️ Setup
-
-### 1. Clone the repository
-```bash
-git clone https://github.com/raghava7129/ml_research_rag.git
-cd ml_research_rag
-```
-
-### 2. Create and activate virtual environment
-```bash
-python -m venv venv
-source venv/bin/activate       # Linux/Mac
-venv\Scripts\activate          # Windows
-```
-
-### 3. Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Set up environment variables
-Create a `.env` file in the project root:
-```
-GOOGLE_API_KEY=your_google_api_key_here
-LANGSMITH_API_KEY=your_langsmith_api_key_here
-LANGSMITH_TRACING=true
-LANGSMITH_PROJECT=ml-research-rag
-```
-Get your free API key from [Google AI Studio](https://aistudio.google.com/).
-
-If you do not want tracing, set `LANGSMITH_TRACING=false`.
-
-### 5. Run the app
-```bash
-streamlit run app.py
-```
-
-Open your browser at `http://localhost:8501`
-
-## 📈 LangSmith Tracing
-
-When `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY` is set, every LangChain run is logged to LangSmith.
-
-Where to check outputs:
-- Go to [LangSmith](https://smith.langchain.com/)
-- Open your project (default: `ml-research-rag`)
-- Check the **Runs** / **Traces** view for each user query, retriever calls, and model outputs
-
-Tip: In the app sidebar you will see whether tracing is ON or OFF.
-
-## 🚀 Deployment
-
-This project is deployed on [Hugging Face Spaces](https://huggingface.co/spaces).
-
-Set these secrets in your Hugging Face Space settings:
-- `GOOGLE_API_KEY`
-- `LANGSMITH_API_KEY`
-- `LANGSMITH_TRACING=true`
-- `LANGSMITH_PROJECT=ml-research-rag`
+The sidebar lets you edit the agent's system prompt — the rules it follows for when to use each tool and how strictly to stay grounded in the documents. This makes the pipeline adaptable to any domain.
