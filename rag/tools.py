@@ -6,8 +6,21 @@ logger=logging.getLogger(__name__)
 
 
 def make_retriever_tool(ragchain_ins):
+    """
+    Build the document-retrieval tool, bound to a specific RAGChain instance
+    (rag_engine) so it reuses your existing Multi-Query + Self-Query retriever,
+    the relevance grader, and the query-rewrite-and-retry logic
+    """
     @tool(response_format='content_and_artifact')
     def retrieve_documents(query: str):
+        """
+        Search the user's uploaded documents (research/technical PDFs) for
+        information relevant to a query. Use this whenever the question could
+        plausibly be answered from the user's documents. Do NOT use this for
+        general knowledge, small talk, or math.
+
+        Returns a summary of what was found, plus the source chunks.
+        """
         graded_docs = ragchain_ins._retrieve_and_grade(query)
 
         if not graded_docs:
@@ -30,6 +43,10 @@ def make_retriever_tool(ragchain_ins):
 
 @tool
 def calculator(expression: str)->str:
+    """
+    Evaluate a basic math expression, e.g. '12 * (7 + 3)' or 'sqrt(16)'.
+    Use this for arithmetic or simple math questions instead of guessing.
+    """
     try:
         result = sympify(expression)
         return str(result)

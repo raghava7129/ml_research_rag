@@ -1,18 +1,18 @@
 import streamlit as st
 import os
 import shutil
-from rag.chain import RAGChain
+from rag.agent import RAGAgent
 from rag.ingest import DocumentIngester
 
 from rag.config import (
     validate_model_access,
     setup_langsmith,
     LLM_MODEL_NAME,
-    DEFAULT_PROMPT_TEMPLATE,
     DOCUMENTS_DIR,
     LEGACY_SOURCE_DIR,
     CHROMA_DIR,
 )
+from rag.agent import DEFAULT_AGENT_SYSTEM_PROMPT
 
 st.set_page_config(
     page_title="DocuChat RAG Demo",
@@ -32,11 +32,11 @@ if "langsmith" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "rag_chain" not in st.session_state:
-    st.session_state.rag_chain = None # RAGChain object, built after ingestion
+if "rag_agent" not in st.session_state:
+    st.session_state.rag_agent = None  # RAGAgent object, built after ingestion
 
 if "ingested" not in st.session_state:
-    st.session_state.ingested = False # tracks whether documents have been ingested
+    st.session_state.ingested = False  # tracks whether documents have been ingested
 
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
@@ -91,15 +91,14 @@ with st.sidebar:
                 st.error(f"❌ Ingestion failed: {e}")
                 st.stop()
 
-        with st.spinner("Building retriever/LLM chain..."):
+        with st.spinner("Building agent (retriever + calculator tools)..."):
             try:
-                rag_chain = RAGChain(prompt_template=DEFAULT_PROMPT_TEMPLATE)
-                # build RAG chain once after ingestion
-                st.session_state.rag_chain = rag_chain
+                rag_agent = RAGAgent(system_prompt=DEFAULT_AGENT_SYSTEM_PROMPT)
+                st.session_state.rag_agent = rag_agent
                 st.session_state.ingested = True
                 st.success(f"✅ {len(uploaded_files)} document(s) ingested successfully!")
             except Exception as e:
-                st.error(f"❌ Chain setup failed: {e}")
+                st.error(f"❌ Agent setup failed: {e}")
 
     if st.session_state.ingested:
         st.info("🟢 Vectorstore is ready — ask your questions!")
@@ -110,56 +109,48 @@ with st.sidebar:
     if st.button("🗑️ Clear & Reset", disabled=not st.session_state.ingested):
         # clear session state
         st.session_state.ingested = False
-        st.session_state.rag_chain = None
+        st.session_state.rag_agent = None
         st.session_state.messages = []
 
         # force file_uploader to reset selected files
         st.session_state.uploader_key += 1
 
-        # delete saved PDFs from disk and recreate folder
         if os.path.exists(DOCUMENTS_DIR):
             shutil.rmtree(DOCUMENTS_DIR)
         os.makedirs(DOCUMENTS_DIR, exist_ok=True)
 
-        # clear legacy source folder if present
         if os.path.exists(LEGACY_SOURCE_DIR):
             shutil.rmtree(LEGACY_SOURCE_DIR)
 
-        # delete chromadb from disk
         if os.path.exists(CHROMA_DIR):
             shutil.rmtree(CHROMA_DIR)
 
         st.success("✅ Reset complete. Upload new documents to start again.")
         st.rerun()
 
-    # Prompt template editor
+    # Agent system prompt editor
     st.divider()
-    st.markdown("### ⚙️ Prompt Template")
-    st.caption("Customize assistant instructions.")
+    st.markdown("### ⚙️ Agent System Prompt")
+    st.caption("Customize the agent's instructions and tool-use rules.")
 
-    # initialize prompt in session state
-    if "prompt_template" not in st.session_state:
-        st.session_state.prompt_template = DEFAULT_PROMPT_TEMPLATE
+    if "system_prompt" not in st.session_state:
+        st.session_state.system_prompt = DEFAULT_AGENT_SYSTEM_PROMPT
 
     edited_prompt = st.text_area(
-        label="Prompt Template",
-        value=st.session_state.prompt_template,
-        height=200,
+        label="System Prompt",
+        value=st.session_state.system_prompt,
+        height=220,
         label_visibility="collapsed",
     )
 
     if st.button("Apply Prompt"):
-        # validate prompt has meaningful instruction text
         if not edited_prompt.strip():
             st.error("Prompt instructions cannot be empty.")
         else:
-            st.session_state.prompt_template = edited_prompt
-            # rebuild chain with new prompt if already ingested
+            st.session_state.system_prompt = edited_prompt
             if st.session_state.ingested:
-                with st.spinner("Rebuilding chain with new prompt..."):
-                    st.session_state.rag_chain = RAGChain(
-                        prompt_template=edited_prompt
-                    )
+                with st.spinner("Rebuilding agent with new prompt..."):
+                    st.session_state.rag_agent = RAGAgent(system_prompt=edited_prompt)
             st.success("Prompt updated!")
 
 # ────────────────────── Chat history display ─────────────────────
@@ -167,7 +158,6 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-        # if assistant message has sources, show them in an expander
         if message["role"] == "assistant" and message.get("sources"):
             with st.expander("📄 View Sources"):
                 for i, doc in enumerate(message["sources"]):
@@ -190,7 +180,7 @@ if prompt := st.chat_input(
     # Get answer from RAG chain.
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
-            result = st.session_state.rag_chain.ask(prompt)
+            result = st.session_state.rag_agent.ask(prompt)
             answer = result["answer"]
             sources = result["sources"]
 
